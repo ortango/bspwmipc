@@ -6,8 +6,8 @@ extern crate serde;
 pub mod reply;
 use reply::{bspwmstate_t,monitor_t,desktop_t,node_t};
 
-const BUFSIZ: usize = 8192 as usize;
-const SOCKET_ENV_VAR: &'static str = "BSPWM_SOCKET";
+const BUFSIZ: usize = 8192;
+const SOCKET_ENV_VAR: &str = "BSPWM_SOCKET";
 
 #[derive(Debug)]
 pub enum EstablishError {
@@ -33,7 +33,7 @@ impl Error for EstablishError {
 
 impl fmt::Display for EstablishError {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		write!(f, "{}", self.to_string())
+		write!(f, "{}", self)
 	}
 }
 
@@ -61,10 +61,10 @@ impl BspwmFuncs for UnixStream {
 			buffer[i] = 0;
 			i += 1;
 		}
-		self.write(&buffer[..i]).unwrap();
+		self.write_all(&buffer[..i]).unwrap();
 		let mut response = String::new();
 		self.read_to_string(&mut response).expect("failed to communicate with bspwm.");
-		return response
+		response
 	}
 }
 
@@ -85,26 +85,22 @@ impl BspwmConnection {
 	}
 	// TODO: add support of status (all) and possible string return.
 	pub fn raw_command(&mut self, message: &str) {
-		let _reply = self.stream.send_receive_bspwm_message(&message);
+		let _reply = self.stream.send_receive_bspwm_message(message);
 	}
 	pub fn get_bspwm_state(&mut self) -> bspwmstate_t {
 		let reply = self.stream.send_receive_bspwm_message("wm -d");
-		let state = serde_json::from_str(&reply).unwrap();
-		return state
+		serde_json::from_str(&reply).unwrap()
 	}
 	pub fn get_monitor(&mut self, id: &u32) -> monitor_t {
 		let reply = self.stream.send_receive_bspwm_message(&("query -T -m ".to_owned() + &id.to_string()));
-		let monitor = serde_json::from_str(&reply).unwrap();
-		return monitor
+		serde_json::from_str(&reply).unwrap()
 	}
 	pub fn get_desktop(&mut self, id: &u32) -> desktop_t {
 		let reply = self.stream.send_receive_bspwm_message(&("query -T -d ".to_owned() + &id.to_string()));
-		let desktop = serde_json::from_str(&reply).unwrap();
-		return desktop
+		serde_json::from_str(&reply).unwrap()
 	}
 	pub fn get_node(&mut self, id: &u32) -> node_t {
 		let reply = self.stream.send_receive_bspwm_message(&("query -T -n ".to_owned() + &id.to_string()));
-		let node = serde_json::from_str(&reply).unwrap();
-		return node
+		serde_json::from_str(&reply).unwrap()
 	}
 }
