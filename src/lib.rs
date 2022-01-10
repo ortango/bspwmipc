@@ -4,7 +4,7 @@ use std::os::unix::net::UnixStream;
 use std::{env, fmt, io};
 extern crate serde;
 pub mod reply;
-use reply::{bspwmstate_t,monitor_t,desktop_t,node_t};
+use reply::{BspwmState,Monitor,Desktop,Node};
 
 const BUFSIZ: usize = 8192;
 const SOCKET_ENV_VAR: &str = "BSPWM_SOCKET";
@@ -87,19 +87,19 @@ impl BspwmConnection {
 	pub fn raw_command(&mut self, message: &str) {
 		let _reply = self.stream.send_receive_bspwm_message(message);
 	}
-	pub fn get_bspwm_state(&mut self) -> bspwmstate_t {
+	pub fn get_bspwm_state(&mut self) -> BspwmState {
 		let reply = self.stream.send_receive_bspwm_message("wm -d");
 		serde_json::from_str(&reply).unwrap()
 	}
-	pub fn get_monitor(&mut self, id: &u32) -> monitor_t {
+	pub fn get_monitor(&mut self, id: &u32) -> Monitor {
 		let reply = self.stream.send_receive_bspwm_message(&("query -T -m ".to_owned() + &id.to_string()));
 		serde_json::from_str(&reply).unwrap()
 	}
-	pub fn get_desktop(&mut self, id: &u32) -> desktop_t {
+	pub fn get_desktop(&mut self, id: &u32) -> Desktop {
 		let reply = self.stream.send_receive_bspwm_message(&("query -T -d ".to_owned() + &id.to_string()));
 		serde_json::from_str(&reply).unwrap()
 	}
-	pub fn get_node(&mut self, id: &u32) -> node_t {
+	pub fn get_node(&mut self, id: &u32) -> Node {
 		let reply = self.stream.send_receive_bspwm_message(&("query -T -n ".to_owned() + &id.to_string()));
 		serde_json::from_str(&reply).unwrap()
 	}
