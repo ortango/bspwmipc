@@ -1,10 +1,30 @@
 use serde::Deserialize;
+use crate::common;
+use crate::common::{Layer,Rectangle};
+
+pub enum BspwmTree {
+	Bspwm,
+	Monitor,
+	Desktop,
+	Node,
+}
+
+impl BspwmTree {
+	pub fn as_str(&self) -> &'static str {
+		match self {
+			BspwmTree::Bspwm => "wm -d",
+			BspwmTree::Monitor => "query -T -m",
+			BspwmTree::Desktop => "query -T -d",
+			BspwmTree::Node => "query -T -n",
+		}
+	}
+}
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all(deserialize = "camelCase"))]
 pub struct BspwmState {
     pub clients_count: u32,
-    pub focus_history: Vec<Coordinates>,
+    pub focus_history: Vec<common::NodeCoordinates>,
     pub focused_monitor_id: u32,
     pub monitors: Vec<Monitor>,
     pub primary_monitor_id: u32,
@@ -33,11 +53,11 @@ pub struct Desktop {
     pub border_width: u16,
     pub focused_node_id: u32,
     pub id: u32,
-    pub layout: Layout,
+    pub layout: common::Layout,
     pub name: String,
     pub padding: Padding,
     pub root: Option<Node>,
-    pub user_layout: Layout,
+    pub user_layout: common::Layout,
     pub window_gap: i32,
 }
 
@@ -87,21 +107,21 @@ impl Node {
 pub struct Client {
     pub border_width: u16,
     pub class_name: String,
-    pub floating_rectangle: Rectangle,
+    pub floating_rectangle: common::Rectangle,
     pub instance_name: String,
-    pub last_layer: Layer,
-    pub last_state: State,
+    pub last_layer: common::Layer,
+    pub last_state: common::NodeState,
     pub layer: Layer,
     pub shown: bool,
-    pub state: State,
-    pub tiled_rectangle: Rectangle,
+    pub state: common::NodeState,
+    pub tiled_rectangle: common::Rectangle,
     pub urgent: bool,
 }
 
 impl Client {
     pub fn get_geometry(&self) -> &Rectangle {
         match self.state {
-            State::Floating => &self.floating_rectangle,
+            common::NodeState::Floating => &self.floating_rectangle,
             _ => &self.tiled_rectangle,
         }
     }
@@ -124,33 +144,9 @@ pub struct Padding {
 }
 
 #[derive(Deserialize, Debug)]
-#[serde(rename_all(deserialize = "camelCase"))]
-pub struct Rectangle {
-    pub x: i16,
-    pub y: i16,
-    pub width: u16,
-    pub height: u16,
-}
-
-#[derive(Deserialize, Debug)]
 pub struct Constraints {
     pub min_width: u16,
     pub min_height: u16,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(rename_all(deserialize = "camelCase"))]
-pub struct Coordinates {
-    pub monitor_id: u32,
-    pub desktop_id: u32,
-    pub node_id: u32,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(rename_all(deserialize = "snake_case"))]
-pub enum Layout {
-    Tiled,
-    Monocle,
 }
 
 #[derive(Deserialize, Debug)]
@@ -167,21 +163,4 @@ pub enum Direction {
     West,
     South,
     East,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(rename_all(deserialize = "snake_case"))]
-pub enum Layer {
-    Below,
-    Normal,
-    Above,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(rename_all(deserialize = "snake_case"))]
-pub enum State {
-    Tiled,
-    PseudoTiled,
-    Floating,
-    Fullscreen,
 }

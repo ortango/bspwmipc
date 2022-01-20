@@ -4,84 +4,58 @@ use std::os::unix::net::UnixStream;
 use std::{env, fmt, io};
 extern crate serde;
 pub mod reply;
-use reply::{BspwmState, Desktop, Monitor, Node};
+pub mod event;
+pub mod common;
+use reply::{BspwmTree, BspwmState, Desktop, Monitor, Node};
 
 const BUFSIZ: usize = 8192;
 const SOCKET_ENV_VAR: &str = "BSPWM_SOCKET";
 const FAILURE_MESSAGE: i32 = 7;
 
 #[derive(Debug)]
-pub enum EstablishError {
-    GetSocketPathError(io::Error),
-    SocketError(io::Error),
-}
-
-impl Error for EstablishError {
-    fn description(&self) -> &str {
-        match *self {
-            EstablishError::GetSocketPathError(_) => "Couldn't determine bspwm's socket path",
-            EstablishError::SocketError(_) => "Found bspwm's socket path but failed to connect",
-        }
-    }
-    fn cause(&self) -> Option<&dyn Error> {
-        match *self {
-            EstablishError::GetSocketPathError(ref e) | EstablishError::SocketError(ref e) => {
-                Some(e)
-            }
-        }
-    }
-}
-
-impl fmt::Display for EstablishError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self)
-    }
-}
-
-#[derive(Debug)]
 pub enum MessageError {
     Send(io::Error),
     Receive(io::Error),
     JsonCouldntParse(serde_json::Error),
+    Status(io::Error),
 }
 
 impl Error for MessageError {
-    fn description(&self) -> &str {
-        match *self {
-            MessageError::Send(_) => "Network error while sending message to bspwm",
-            MessageError::Receive(_) => "Network error while receiving message from bspwm",
-            MessageError::JsonCouldntParse(_) => {
-                "Got a response from bspwm but couldn't parse the JSON"
-            }
-        }
-    }
     fn cause(&self) -> Option<&dyn Error> {
         match *self {
             MessageError::Send(ref e) => Some(e),
             MessageError::Receive(ref e) => Some(e),
             MessageError::JsonCouldntParse(ref e) => Some(e),
+            MessageError::Status(ref e) => Some(e),
         }
     }
 }
 
 impl fmt::Display for MessageError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self)
+        match self {
+            MessageError::Send(_) => write!(f, "Network error while sending message to bspwm"),
+            MessageError::Receive(_) => {
+                write!(f, "Network error while receiving message from bspwm")
+            }
+            MessageError::JsonCouldntParse(_) => {
+                write!(f, "Got a response from bspwm but couldn't parse the JSON")
+            }
+            MessageError::Status(_) => write!(f, "Bspwm command failed"),
+        }
     }
 }
 
-//TODO: correctly set fallback socket value
-fn get_socket_path() -> io::Result<String> {
-    if let Ok(sockpath) = env::var(SOCKET_ENV_VAR) {
-        return Ok(sockpath);
+fn get_socket_path() -> String {
+    match env::var(SOCKET_ENV_VAR) {
+	    Ok(p) => p,
+	    Err(_) => format!("/tmp/bspwm{}_{}_{}-socket", "", 0, 0),
     }
-    return Ok(format!("/tmp/bspwm{}_{}_{}-socket", "", 0, 0));
 }
 
 trait BspwmFuncs {
     fn send_bspwm_message(&mut self, payload: &str) -> io::Result<()>;
-    fn receive_bspwm_message(&mut self) -> io::Result<String>;
-    fn send_receive_bspwm_message(&mut self, message: &str) -> Result<String, MessageError>;
+    fn receive_bspwm_message(&mut self) -> io::Result<(String, bool)>;
 }
 
 impl BspwmFuncs for UnixStream {
@@ -98,72 +72,86 @@ impl BspwmFuncs for UnixStream {
         }
         self.write_all(&buffer[..i])
     }
-    fn receive_bspwm_message(&mut self) -> io::Result<String> {
+    // bufreader still probably needed because of subscribe. unless it would be seperated out.
+    // boo.
+    fn receive_bspwm_message(&mut self) -> io::Result<(String, bool)> {
         let mut buffer = Vec::new();
+        let mut status: bool = true;
+        let mut response: String = "".to_string();
         let size = self.read_to_end(&mut buffer)?;
-        buffer.push(0);
-        let offset = match buffer[0] as i32 {
-            FAILURE_MESSAGE => 1,
-            _ => 0,
-        };
-        let response = String::from_utf8_lossy(&buffer[offset..size]).into_owned();
-        match offset {
-            1 => Err(io::Error::new(io::ErrorKind::Other, response)),
-            _ => Ok(response),
+        if size > 0 {
+            let offset = match buffer[0] as i32 {
+                FAILURE_MESSAGE => 1,
+                _ => 0,
+            };
+            response = String::from_utf8_lossy(&buffer[offset..size]).into_owned();
+            status = offset == 0;
         }
-    }
-    fn send_receive_bspwm_message(&mut self, message: &str) -> Result<String, MessageError> {
-        if let Err(e) = self.send_bspwm_message(message) {
-            return Err(MessageError::Send(e));
-        }
-        let response = match self.receive_bspwm_message() {
-            Ok(message) => message,
-            Err(e) => {
-                return Err(MessageError::Receive(e));
-            }
-        };
-        Ok(response)
+        Ok((response, status))
     }
 }
 
 #[derive(Debug)]
 pub struct BspwmConnection {
-    stream: UnixStream,
+    socket_path: String,
+}
+
+impl Default for BspwmConnection {
+	fn default() -> BspwmConnection {
+		BspwmConnection {
+			socket_path: get_socket_path(),
+		}
+	}
 }
 
 impl BspwmConnection {
-    pub fn connect() -> Result<BspwmConnection, EstablishError> {
-        match get_socket_path() {
-            Ok(path) => match UnixStream::connect(path) {
-                Ok(stream) => Ok(BspwmConnection { stream }),
-                Err(error) => Err(EstablishError::SocketError(error)),
-            },
-            Err(error) => Err(EstablishError::GetSocketPathError(error)),
+	pub fn new() -> Self{
+		BspwmConnection::default()
+	}
+    fn send_receive_bspwm_message(&mut self, message: &str) -> Result<String, MessageError> {
+	    let mut stream = match UnixStream::connect(&self.socket_path) {
+		    Ok(s) => s,
+		    Err(e) => return Err(MessageError::Send(e)),
+	    };
+        if let Err(e) = stream.send_bspwm_message(message) {
+            return Err(MessageError::Send(e));
         }
+        let response = match stream.receive_bspwm_message() {
+            Ok((r, s)) => match s {
+                true => r,
+                false => {
+                    return Err(
+	                    MessageError::Status(io::Error::new(io::ErrorKind::Other, r,))
+                    )
+                }
+            },
+            Err(e) => return Err(MessageError::Receive(e)),
+        };
+        Ok(response)
     }
     pub fn raw_command(&mut self, message: &str) -> Result<String, MessageError> {
-        self.stream.send_receive_bspwm_message(message)
+        self.send_receive_bspwm_message(message)
     }
     fn get_json<T: serde::de::DeserializeOwned>(
         &mut self,
         message: &str,
     ) -> Result<T, MessageError> {
-        let response = self.stream.send_receive_bspwm_message(message)?;
+        let response = self.send_receive_bspwm_message(message)?;
         match serde_json::from_str(&response) {
             Ok(v) => Ok(v),
             Err(e) => Err(MessageError::JsonCouldntParse(e)),
         }
     }
     pub fn get_bspwm_state(&mut self) -> Result<BspwmState, MessageError> {
-        self.get_json("wm -d")
+        self.get_json(BspwmTree::Bspwm.as_str())
     }
     pub fn get_monitor(&mut self, id: &u32) -> Result<Monitor, MessageError> {
-        self.get_json(&(format!("query -T -m {}", &id)))
+        self.get_json(&(format!("{} {}", BspwmTree::Monitor.as_str(), &id)))
     }
     pub fn get_desktop(&mut self, id: &u32) -> Result<Desktop, MessageError> {
-        self.get_json(&(format!("query -T -d {}", &id)))
+        self.get_json(&(format!("{} {}", BspwmTree::Desktop.as_str(), &id)))
     }
     pub fn get_node(&mut self, id: &u32) -> Result<Node, MessageError> {
-        self.get_json(&(format!("query -T -n {}", &id)))
+        self.get_json(&(format!("{} {}", BspwmTree::Node.as_str(), &id)))
     }
 }
